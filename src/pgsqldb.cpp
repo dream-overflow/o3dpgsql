@@ -521,7 +521,7 @@ UInt32 PgSqlQuery::getOutAttr(const CString &name)
     if (it != m_outputNames.end()) {
         return it->second;
     } else {
-        O3D_ERROR(E_InvalidParameter("Uknown output attribute name"));
+        O3D_ERROR(E_InvalidParameter(o3d::String("Unknown output attribute name ") + name));
     }
 }
 
@@ -531,7 +531,7 @@ const DbVariable &PgSqlQuery::getOut(const CString &name) const
     if (it != m_outputNames.end()) {
         return *m_outputs[it->second];
     } else {
-        O3D_ERROR(E_InvalidParameter("Uknown output attribute name"));
+        O3D_ERROR(E_InvalidParameter(o3d::String("Unknown output attribute name ") + name));
     }
 }
 
@@ -644,6 +644,8 @@ void PgSqlQuery::execute()
     DbVariable::IntType intType;
     DbVariable::VarType varType;
 
+    o3d::Bool initial = m_outputNames.empty();
+
     // int PQfnumber(const PGresult *res,const char *column_name); inverse de PQfname
     for (o3d::Int32 col = 0; col < nCols; ++col) {
         char* fname = PQfname(m_pRes, col);
@@ -651,7 +653,7 @@ void PgSqlQuery::execute()
             continue;
         }
 
-        if (m_outputNames.empty()) {
+        if (initial) {
             m_outputNames.insert(std::make_pair(fname, col));
         }
 
@@ -659,7 +661,7 @@ void PgSqlQuery::execute()
         pgsqltype = ntohl(*((int32_t *) &pgsqltype));
         // int size = PQfsize(m_pRes, col);
         // int mod = PQfmod(m_pRes, col);
-        printf("%s : %i = %i\n", fname, col, intType);
+        // printf("%s : %i = %i\n", fname, col, intType);
 
         unmapType(pgsqltype, maxSize, intType, varType);
 
@@ -731,15 +733,25 @@ Bool PgSqlQuery::fetch()
             // int32
             if (var.getIntType() == DbVariable::IT_INT32) {
                 var.setInt32(ntohl(*((int32_t *) value)));
-                printf("int32 %i = %i\n", i, var.asInt32());
-            // double
+                // printf("int32 %i = %i\n", i, var.asInt32());
+                // double
             } else if (var.getIntType() == DbVariable::IT_DOUBLE) {
-                printf("double %i \n", i);
-               // var.setDouble();
+                // printf("double %i \n", i);
+                // var.setDouble();
             }
             // string
             else if (var.getIntType() == DbVariable::IT_ARRAY_CHAR) {
-                printf("str %i %i %s\n", i, len, value);
+                // printf("str %i %i %s\n", i, len, value);
+                ArrayChar *array = (ArrayChar*)var.getObject();
+
+                // add a terminal zero
+                memcpy(array->getData(), value, len);
+                array->setSize(len+1);
+                (*array)[array->getSize()-1] = 0;
+            }
+            // string
+            else if (var.getIntType() == DbVariable::IT_CSTRING) {
+                // printf("str %i %i %s\n", i, len, value);
                 var.setCString(value);
             }
             // array
