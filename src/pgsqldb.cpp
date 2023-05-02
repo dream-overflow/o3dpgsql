@@ -14,13 +14,91 @@
 #include <o3d/core/application.h>
 #include <o3d/core/objects.h>
 
+#include <netinet/in.h>
+
 using namespace o3d;
 using namespace o3d::pgsql;
 
 static UInt32 ms_pgSqlLibRefCount = 0;
 static Bool ms_pgSqlLibState = False;
 
+// workaround for postgres defining their OIDs in a private header file
+#define QBOOLOID 16
+#define QINT8OID 20
+#define QINT2OID 21
+#define QINT4OID 23
+#define QNUMERICOID 1700
+#define QFLOAT4OID 700
+#define QFLOAT8OID 701
+#define QABSTIMEOID 702
+#define QRELTIMEOID 703
+#define QDATEOID 1082
+#define QTIMEOID 1083
+#define QTIMETZOID 1266
+#define QTIMESTAMPOID 1114
+#define QTIMESTAMPTZOID 1184
+#define QOIDOID 2278
+#define QBYTEAOID 17
+#define QREGPROCOID 24
+#define QXIDOID 28
+#define QCIDOID 29
+
+#define QBITOID 1560
+#define QVARBITOID 1562
+
+// add json
+
+#define SMJSONOID 114
+#define SMJSONBOID 3802
+
+// add arrays
+
+#define SMBOOL_ARRAYOID 1000
+#define SMINT8_ARRAYOID 1016
+#define SMINT2_ARRAYOID 1005
+#define SMINT4_ARRAYOID 1007
+#define SMNUMERIC_ARRAYOID 1231
+#define SMFLOAT4_ARRAYOID 1021
+#define SMFLOAT8_ARRAYOID 1022
+#define SMABSTIME_ARRAYOID 1023
+#define SMRELTIME_ARRAYOID 1024
+#define SMDATE_ARRAYOID 1182
+#define SMTIME_ARRAYOID 1183
+#define SMTIMETZ_ARRAYOID 1270
+#define SMTIMESTAMP_ARRAYOID 1115
+#define SMTIMESTAMPTZ_ARRAYOID 1185
+#define SMBYTEA_ARRAYOID 1001
+#define SMREGPROC_ARRAYOID 1008
+#define SMXID_ARRAYOID 1011
+#define SMCID_ARRAYOID 1012
+#define SMJSON_ARRAYOID 199
+#define SMJSONB_ARRAYOID 3807
+
+#define SMVARCHAR_ARRAYOID 1015
+#define SMTEXT_ARRAYOID 1009
+
 // STMT https://www.postgresql.org/docs/9.3/sql-prepare.html
+
+void PgSql::init()
+{
+    if (!ms_pgSqlLibState) {
+        Application::registerObject("o3d::PgSql", nullptr);
+        ms_pgSqlLibState = True;
+        ms_pgSqlLibRefCount = 0;
+    }
+}
+
+void PgSql::quit()
+{
+    if (ms_pgSqlLibState) {
+        if (ms_pgSqlLibRefCount != 0) {
+            O3D_ERROR(E_InvalidOperation("Trying to quit pgsql library but some database still exists"));
+        }
+
+        Application::unregisterObject("o3d::PgSql");
+        ms_pgSqlLibState = False;
+    }
+}
 
 //! Default ctor
 PgSqlDb::PgSqlDb() :
@@ -69,7 +147,7 @@ Bool PgSqlDb::connect(
     }
 
     String connInfo = String("hostaddr={0} port={1} dbname={2} user={3} password={4} keepalives=1")
-                           .arg(host).arg(port).arg(name).arg(user).arg(pwd);
+                           .arg(host).arg(port).arg(database).arg(user).arg(password);
     // PGresult *res;
     m_pDB = PQconnectdb(connInfo.toUtf8().getData());
     O3D_ASSERT(m_pDB != nullptr);
@@ -79,7 +157,7 @@ Bool PgSqlDb::connect(
         o3d::String msg;
         msg.fromUtf8(err);
 
-        O3D_ERROR(o3d::E_PgSqlError(msg));
+        O3D_ERROR(o3d::pgsql::E_PgSqlError(msg));
     }
 
     O3D_MESSAGE("Successfuly connected to the PgSql database");
@@ -117,7 +195,7 @@ DbQuery* PgSqlDb::newDbQuery(const String &name, const CString &query)
 }
 
 // Virtual destructor
-PgSqlDb::~PgSqlDb()
+PgSqlQuery::~PgSqlQuery()
 {
     for (Int32 i = 0; i < m_inputs.getSize(); ++i) {
         deletePtr(m_inputs[i]);
@@ -127,20 +205,13 @@ PgSqlDb::~PgSqlDb()
         deletePtr(m_outputs[i]);
     }
 
-    if (m_stmt) {
-        if (m_prepareMetaResult) {
-            mysql_free_result(m_prepareMetaResult);
-        }
-
-        //if (m_prepareMetaParam) {
-        //    mysql_free_result(m_prepareMetaParam);
-        // }
-
-        // mysql_stmt_close(m_stmt);
+    if (m_pRes) {
+        PQclear(m_pRes);
+        m_pRes = nullptr;
     }
 }
 
-void PgSqlDb::setArrayUInt8(UInt32 attr, const ArrayUInt8 &v)
+void PgSqlQuery::setArrayUInt8(UInt32 attr, const ArrayUInt8 &v)
 {
     if (attr >= m_numParam) {
         O3D_ERROR(E_IndexOutOfRange("Input attribute id"));
@@ -151,16 +222,16 @@ void PgSqlDb::setArrayUInt8(UInt32 attr, const ArrayUInt8 &v)
     }
 
     if (v.getSize() < (1 << 8)) {
-        m_inputs[attr] = new MySqlDbVariable(DbVariable::IT_ARRAY_UINT8, DbVariable::TINY_ARRAY, (UInt8*)&v);
+        m_inputs[attr] = new PgSqlDbVariable(DbVariable::IT_ARRAY_UINT8, DbVariable::TINY_ARRAY, (UInt8*)&v);
     } else if (v.getSize() < (1 << 16)) {
-        m_inputs[attr] = new MySqlDbVariable(DbVariable::IT_ARRAY_UINT8, DbVariable::ARRAY, (UInt8*)&v);
+        m_inputs[attr] = new PgSqlDbVariable(DbVariable::IT_ARRAY_UINT8, DbVariable::ARRAY, (UInt8*)&v);
     } else if (v.getSize() < (1 << 24)) {
-        m_inputs[attr] = new MySqlDbVariable(DbVariable::IT_ARRAY_UINT8, DbVariable::MEDIUM_ARRAY, (UInt8*)&v);
+        m_inputs[attr] = new PgSqlDbVariable(DbVariable::IT_ARRAY_UINT8, DbVariable::MEDIUM_ARRAY, (UInt8*)&v);
     } else {
-        m_inputs[attr] = new MySqlDbVariable(DbVariable::IT_ARRAY_UINT8, DbVariable::LONG_ARRAY, (UInt8*)&v);
+        m_inputs[attr] = new PgSqlDbVariable(DbVariable::IT_ARRAY_UINT8, DbVariable::LONG_ARRAY, (UInt8*)&v);
     }
 
-    DbVariable &var = *m_inputs[attr];
+   /* DbVariable &var = *m_inputs[attr];
 
     enum_field_types dbtype = (enum_field_types)0;
     unsigned long dbsize = 0;
@@ -177,11 +248,11 @@ void PgSqlDb::setArrayUInt8(UInt32 attr, const ArrayUInt8 &v)
 
     var.setLength(var.getObjectSize());
     m_param_bind[attr].length = (unsigned long*)var.getLengthPtr();
-
+*/
     m_needBind = True;
 }
 
-void PgSqlDb::setSmartArrayUInt8(UInt32 attr, const SmartArrayUInt8 &v)
+void PgSqlQuery::setSmartArrayUInt8(UInt32 attr, const SmartArrayUInt8 &v)
 {
     if (attr >= m_numParam) {
         O3D_ERROR(E_IndexOutOfRange("Input attribute id"));
@@ -192,17 +263,17 @@ void PgSqlDb::setSmartArrayUInt8(UInt32 attr, const SmartArrayUInt8 &v)
     }
 
     if (v.getSizeInBytes() < (1 << 8)) {
-        m_inputs[attr] = new MySqlDbVariable(DbVariable::IT_SMART_ARRAY_UINT8, DbVariable::TINY_ARRAY, (UInt8*)&v);
+        m_inputs[attr] = new PgSqlDbVariable(DbVariable::IT_SMART_ARRAY_UINT8, DbVariable::TINY_ARRAY, (UInt8*)&v);
     } else if (v.getSizeInBytes() < (1 << 16)) {
-        m_inputs[attr] = new MySqlDbVariable(DbVariable::IT_SMART_ARRAY_UINT8, DbVariable::ARRAY, (UInt8*)&v);
+        m_inputs[attr] = new PgSqlDbVariable(DbVariable::IT_SMART_ARRAY_UINT8, DbVariable::ARRAY, (UInt8*)&v);
     } else if (v.getSizeInBytes() < (1 << 24)) {
-        m_inputs[attr] = new MySqlDbVariable(DbVariable::IT_SMART_ARRAY_UINT8, DbVariable::MEDIUM_ARRAY, (UInt8*)&v);
+        m_inputs[attr] = new PgSqlDbVariable(DbVariable::IT_SMART_ARRAY_UINT8, DbVariable::MEDIUM_ARRAY, (UInt8*)&v);
     } else {
-        m_inputs[attr] = new MySqlDbVariable(DbVariable::IT_SMART_ARRAY_UINT8, DbVariable::LONG_ARRAY, (UInt8*)&v);
+        m_inputs[attr] = new PgSqlDbVariable(DbVariable::IT_SMART_ARRAY_UINT8, DbVariable::LONG_ARRAY, (UInt8*)&v);
     }
 
     DbVariable &var = *m_inputs[attr];
-
+/*
     enum_field_types dbtype = (enum_field_types)0;
     unsigned long dbsize = 0;
 
@@ -218,16 +289,16 @@ void PgSqlDb::setSmartArrayUInt8(UInt32 attr, const SmartArrayUInt8 &v)
 
     var.setLength(var.getObjectSize());
     m_param_bind[attr].length = (unsigned long*)var.getLengthPtr();
-
+*/
     m_needBind = True;
 }
 
-void PgSqlDb::setInStream(UInt32 attr, const InStream &v)
+void PgSqlQuery::setInStream(UInt32 attr, const InStream &v)
 {
     O3D_ERROR(E_InvalidOperation("Not yet implemented"));
 }
 
-void PgSqlDb::setBool(UInt32 attr, Bool v)
+void PgSqlQuery::setBool(UInt32 attr, Bool v)
 {
     if (attr >= m_numParam) {
         O3D_ERROR(E_IndexOutOfRange("Input attribute id"));
@@ -237,9 +308,9 @@ void PgSqlDb::setBool(UInt32 attr, Bool v)
         deletePtr(m_inputs[attr]);
     }
 
-    m_inputs[attr] = new MySqlDbVariable(DbVariable::IT_BOOL, DbVariable::BOOLEAN, (UInt8*)&v);
+    m_inputs[attr] = new PgSqlDbVariable(DbVariable::IT_BOOL, DbVariable::BOOLEAN, (UInt8*)&v);
     DbVariable &var = *m_inputs[attr];
-
+/*
     enum_field_types dbtype = (enum_field_types)0;
     unsigned long dbsize = 0;
 
@@ -255,11 +326,11 @@ void PgSqlDb::setBool(UInt32 attr, Bool v)
 
     var.setLength(dbsize);
     m_param_bind[attr].length = (unsigned long*)var.getLengthPtr();
-
+*/
     m_needBind = True;
 }
 
-void PgSqlDb::setInt32(UInt32 attr, Int32 v)
+void PgSqlQuery::setInt32(UInt32 attr, Int32 v)
 {
     if (attr >= m_numParam) {
         O3D_ERROR(E_IndexOutOfRange("Input attribute id"));
@@ -269,9 +340,9 @@ void PgSqlDb::setInt32(UInt32 attr, Int32 v)
         deletePtr(m_inputs[attr]);
     }
 
-    m_inputs[attr] = new MySqlDbVariable(DbVariable::IT_INT32, DbVariable::INT32, (UInt8*)&v);
+    m_inputs[attr] = new PgSqlDbVariable(DbVariable::IT_INT32, DbVariable::INT32, (UInt8*)&v);
     DbVariable &var = *m_inputs[attr];
-
+/*
     enum_field_types dbtype = (enum_field_types)0;
     unsigned long dbsize = 0;
 
@@ -288,11 +359,11 @@ void PgSqlDb::setInt32(UInt32 attr, Int32 v)
 
     var.setLength(dbsize);
     m_param_bind[attr].length = (unsigned long*)var.getLengthPtr();
-
+*/
     m_needBind = True;
 }
 
-void PgSqlDb::setUInt32(UInt32 attr, UInt32 v)
+void PgSqlQuery::setUInt32(UInt32 attr, UInt32 v)
 {
     if (attr >= m_numParam) {
         O3D_ERROR(E_IndexOutOfRange("Input attribute id"));
@@ -302,9 +373,9 @@ void PgSqlDb::setUInt32(UInt32 attr, UInt32 v)
         deletePtr(m_inputs[attr]);
     }
 
-    m_inputs[attr] = new MySqlDbVariable(DbVariable::IT_INT32, DbVariable::UINT32, (UInt8*)&v);
+    m_inputs[attr] = new PgSqlDbVariable(DbVariable::IT_INT32, DbVariable::UINT32, (UInt8*)&v);
     DbVariable &var = *m_inputs[attr];
-
+/*
     enum_field_types dbtype = (enum_field_types)0;
     unsigned long dbsize = 0;
 
@@ -322,11 +393,11 @@ void PgSqlDb::setUInt32(UInt32 attr, UInt32 v)
 
     var.setLength(dbsize);
     m_param_bind[attr].length = (unsigned long*)var.getLengthPtr();
-
+*/
     m_needBind = True;
 }
 
-void PgSqlDb::setCString(UInt32 attr, const CString &v)
+void PgSqlQuery::setCString(UInt32 attr, const CString &v)
 {
     if (attr >= m_numParam) {
         O3D_ERROR(E_IndexOutOfRange("Input attribute id"));
@@ -336,29 +407,29 @@ void PgSqlDb::setCString(UInt32 attr, const CString &v)
         deletePtr(m_inputs[attr]);
     }
 
-    m_inputs[attr] = new MySqlDbVariable(DbVariable::IT_CSTRING, DbVariable::VARCHAR, (UInt8*)&v);
+    m_inputs[attr] = new PgSqlDbVariable(DbVariable::IT_CSTRING, DbVariable::VARCHAR, (UInt8*)&v);
     DbVariable &var = *m_inputs[attr];
 
-    enum_field_types dbtype = (enum_field_types)0;
-    unsigned long dbsize = 0;
+//    int dbtype = 0;
+//    unsigned long dbsize = 0;
 
-    mapType(var.getType(), dbtype, dbsize);
+//    mapType(var.getType(), dbtype, dbsize);
 
-    memset(&m_param_bind[attr], 0, sizeof(MYSQL_BIND));
+//    memset(&m_param_bind[attr], 0, sizeof(MYSQL_BIND));
 
-    m_param_bind[attr].buffer_type = (enum_field_types)dbtype;
-    m_param_bind[attr].buffer = (void*)var.getObjectPtr();
-    m_param_bind[attr].buffer_length = var.getObjectSize()-1;
+//    m_param_bind[attr].buffer_type = (enum_field_types)dbtype;
+//    m_param_bind[attr].buffer = (void*)var.getObjectPtr();
+//    m_param_bind[attr].buffer_length = var.getObjectSize()-1;
 
-    m_param_bind[attr].is_null = 0;
+//    m_param_bind[attr].is_null = 0;
 
-    var.setLength(var.getObjectSize()-1);
-    m_param_bind[attr].length = (unsigned long*)var.getLengthPtr();
+//    var.setLength(var.getObjectSize()-1);
+//    m_param_bind[attr].length = (unsigned long*)var.getLengthPtr();
 
     m_needBind = True;
 }
 
-void PgSqlDb::setDate(UInt32 attr, const Date &v)
+void PgSqlQuery::setDate(UInt32 attr, const Date &v)
 {
     if (attr >= m_numParam) {
         O3D_ERROR(E_IndexOutOfRange("Input attribute id"));
@@ -401,7 +472,7 @@ void PgSqlDb::setDate(UInt32 attr, const Date &v)
 //    m_needBind = True;
 }
 
-void PgSqlDb::setTimestamp(UInt32 attr, const DateTime &v)
+void PgSqlQuery::setTimestamp(UInt32 attr, const DateTime &v)
 {
     if (attr >= m_numParam) {
         O3D_ERROR(E_IndexOutOfRange("Input attribute id"));
@@ -444,7 +515,7 @@ void PgSqlDb::setTimestamp(UInt32 attr, const DateTime &v)
 //    m_needBind = True;
 }
 
-UInt32 PgSqlDb::getOutAttr(const CString &name)
+UInt32 PgSqlQuery::getOutAttr(const CString &name)
 {
     auto it = m_outputNames.find(name);
     if (it != m_outputNames.end()) {
@@ -454,7 +525,7 @@ UInt32 PgSqlDb::getOutAttr(const CString &name)
     }
 }
 
-const DbVariable &PgSqlDb::getOut(const CString &name) const
+const DbVariable &PgSqlQuery::getOut(const CString &name) const
 {
     auto it = m_outputNames.find(name);
     if (it != m_outputNames.end()) {
@@ -464,7 +535,7 @@ const DbVariable &PgSqlDb::getOut(const CString &name) const
     }
 }
 
-const DbVariable &PgSqlDb::getOut(UInt32 attr) const
+const DbVariable &PgSqlQuery::getOut(UInt32 attr) const
 {
     if (attr < (UInt32)m_outputs.getSize()) {
         return *m_outputs[attr];
@@ -473,158 +544,140 @@ const DbVariable &PgSqlDb::getOut(UInt32 attr) const
     }
 }
 
-// Prepare the query. Can do nothing if not preparation is needed
-void PgSqlDb::prepareQuery()
-{
-    O3D_ASSERT(m_pDB != nullptr);
-    if (m_pDB) {
-//		m_stmt = mysql_stmt_init(m_pDB);
-//        O3D_ASSERT(m_stmt != nullptr);
-
-//        int result = mysql_stmt_prepare(m_stmt, m_query.getData(), (unsigned long)m_query.length());
-//        if (result != 0) {
-//            String err = mysql_stmt_error(m_stmt);
-
-//            mysql_stmt_close(m_stmt);
-//            m_stmt = nullptr;
-
-//            O3D_ERROR(E_MySqlError(err));
-//        }
-
-//        // inputs
-//        m_numParam = mysql_stmt_param_count(m_stmt);
-//        for (UInt32 i = 0; i < m_numParam; ++i) {
-//            memset(&m_param_bind[i], 0, sizeof(MYSQL_BIND));
-//        }
-
-////        m_prepareMetaParam = mysql_stmt_param_metadata(m_stmt);
-////        if (!m_prepareMetaParam) {
-////            O3D_ERROR(E_MySqlError(mysql_stmt_error(m_stmt)));
-////        }
-
-////        mysql_field_seek(m_prepareMetaParam, 0);
-
-//          MYSQL_FIELD *field;
-//          int id = 0;
-////        while ((field = mysql_fetch_field(m_prepareMetaParam)) != nullptr) {
-////            memset(&m_param_bind[id], 0, sizeof(MYSQL_BIND));
-
-////            m_param_length[id] = 0/*TODO*/;
-
-////            m_param_bind[id].buffer = /*TODO*/nullptr;
-
-////            m_param_bind[id].buffer_length = /*TODO*/0;//var.getObjectSize();
-
-////            m_param_bind[id].is_null = 0;
-////            m_param_bind[id].length = &m_param_length[id];
-
-////            ++id;
-////        }
-
-//        // outputs
-//        m_prepareMetaResult = mysql_stmt_result_metadata(m_stmt);
-//        if (m_prepareMetaResult) {
-//            mysql_field_seek(m_prepareMetaResult, 0);
-
-//            UInt32 maxSize;
-//            DbVariable::IntType intType;
-//            DbVariable::VarType varType;
-
-//            id = 0;
-//            while ((field = mysql_fetch_field(m_prepareMetaResult)) != nullptr) {
-//                memset(&m_result_bind[id], 0, sizeof(MYSQL_BIND));
-
-//                unmapType(field->type, maxSize, intType, varType);
-
-//                m_outputNames.insert(std::make_pair(field->name, id));
-
-//                m_outputs[id] = new MySqlDbVariable(intType, varType, maxSize);
-//                DbVariable &var = *m_outputs[id];
-
-//                m_result_bind[id].buffer = (void*)var.getObjectPtr();
-//                m_result_bind[id].buffer_type = field->type;
-//                m_result_bind[id].buffer_length = var.getObjectSize();
-
-//                m_result_bind[id].is_null = (my_bool*)var.getIsNullPtr();
-//                m_result_bind[id].error = (my_bool*)var.getErrorPtr();
-
-//                var.setLength(var.getObjectSize());
-//                m_result_bind[id].length = (unsigned long*)var.getLengthPtr();
-
-//                ++id;
-//            }
-//        }
-
-//        m_needBind = True;
-	}
-}
-
-// Unbind the current bound DbAttribute
-void PgSqlDb::unbind()
-{
-//    if (m_stmt) {
-//        for (Int32 i = 0; i < m_inputs.getSize(); ++i) {
-//            deletePtr(m_inputs[i]);
-//        }
-
-////		m_is_error.destroy();
-////		m_param_bind.destroy();
-////		m_length.destroy();
-////		m_param_length.destroy();
-////		m_param_bind.destroy();
-////		m_result_bind.destroy();
-//    }
-}
-
-PgSqlDb::MySqlQuery(PGconn *pDb, const String &name, const CString &query) :
+PgSqlQuery::PgSqlQuery(PGconn *pDb, const String &name, const CString &query) :
     m_name(name),
     m_query(query),
     m_numParam(0),
     m_numRow(0),
     m_currRow(0),
     m_pDB(pDb),
-    // m_stmt(nullptr),
-    ////m_prepareMetaParam(nullptr),
-    //m_prepareMetaResult(nullptr)
+    m_pRes(nullptr)
 {
     prepareQuery();
 }
 
-// Execute the query on the current bound DbAttribute and store the result in the DbAttribute
-void PgSqlDb::execute()
+// Prepare the query. Can do nothing if not preparation is needed
+void PgSqlQuery::prepareQuery()
 {
-//    O3D_ASSERT(m_stmt != nullptr);
+    O3D_ASSERT(m_pDB != nullptr);
+    if (m_pDB) {
+        // @todo later stmt, but for no simple
 
-//    if (m_stmt) {
-//        m_numRow = 0;
-//        m_currRow = 0;
+        // inputs
+        o3d::String str(m_query);
 
-//        // bind if necessary
-//        if (m_needBind) {
-//            if (mysql_stmt_bind_param(m_stmt, &m_param_bind[0]) != 0) {
-//                O3D_ERROR(E_MySqlError(mysql_stmt_error(m_stmt)));
-//            }
+        m_numParam = str.count('$');   // probably no sufficient
+        m_inputs.setSize(m_numParam);
+        // m_outputs
+        // m_outputNames
 
-//            m_needBind = False;
-//        }
+        // https://docs.postgresql.fr/12/libpq-exec.html
+        // PGresult *PQprepare(PGconn *conn, const char *stmtName, const char *query, int nParams, const Oid *paramTypes);
+        // PGresult *PQdescribePrepared(PGconn *conn, const char *stmtName);
 
-//        if (mysql_stmt_execute(m_stmt) != 0) {
-//            O3D_ERROR(E_MySqlError(mysql_stmt_error(m_stmt)));
-//        }
-
-//        if (mysql_stmt_bind_result(m_stmt,&m_result_bind[0]) != 0) {
-//            O3D_ERROR(E_MySqlError(mysql_stmt_error(m_stmt)));
-//        }
-
-//        if (mysql_stmt_store_result(m_stmt) != 0) {
-//            O3D_ERROR(E_MySqlError(mysql_stmt_error(m_stmt)));
-//        }
-
-//        m_numRow = mysql_stmt_num_rows(m_stmt);
-//    }
+        m_needBind = True;
+	}
 }
 
-void PgSqlDb::update()
+// Unbind the current bound DbAttribute
+void PgSqlQuery::unbind()
+{
+
+}
+
+// Execute the query on the current bound DbAttribute and store the result in the DbAttribute
+void PgSqlQuery::execute()
+{
+    if (m_pRes) {
+        PQclear(m_pRes);
+        m_pRes = nullptr;
+    }
+
+    // const Oid *paramTypes;
+    char **paramValues = new char*[m_numParam];
+    const Oid *paramTypes = nullptr;    // let the backend deduce param type
+    const int *paramLengths = nullptr;  // if all texts no need
+    const int *paramFormats = nullptr;  // default to all text params
+
+    for (o3d::Int32 i = 0; i < m_inputs.getSize(); ++i) {
+        if (m_inputs[i]->getIntType() == DbVariable::IT_CSTRING) {
+            CString v = m_inputs[i]->asCString();
+
+            paramValues[i] = new char[v.length()+1];
+            memcpy(paramValues[i], v.getData(), v.length()+1);
+        } else if (m_inputs[i]->getIntType() == DbVariable::IT_INT32) {
+
+        } else if (m_inputs[i]->getIntType() == DbVariable::IT_ARRAY_UINT8) {
+
+        } else if (m_inputs[i]->getIntType() == DbVariable::IT_DOUBLE) {
+
+        } else {
+            // @todo others ...
+        }
+    }
+
+    // PGresult *res = PQexecPrepared(...)
+    m_pRes = PQexecParams(m_pDB,
+                       m_query.getData(),
+                       m_numParam,
+                       paramTypes,
+                       paramValues,
+                       paramLengths,
+                       paramFormats,
+                       1);      // ask for binary results
+
+    if (PQresultStatus(m_pRes) != PGRES_TUPLES_OK) {
+        o3d::String msg;
+        msg.fromUtf8(PQerrorMessage(m_pDB));
+        O3D_ERROR(o3d::pgsql::E_PgSqlError(msg));
+        PQclear(m_pRes);
+        m_pRes = nullptr;
+    }
+
+    m_currRow = 0;
+    m_numRow = PQntuples(m_pRes);
+
+    // bind output types
+    o3d::Int32 nCols = PQnfields(m_pRes);
+
+    UInt32 maxSize;
+    DbVariable::IntType intType;
+    DbVariable::VarType varType;
+
+    // int PQfnumber(const PGresult *res,const char *column_name); inverse de PQfname
+    for (o3d::Int32 col = 0; col < nCols; ++col) {
+        char* fname = PQfname(m_pRes, col);
+        if (fname == nullptr) {
+            continue;
+        }
+
+        if (m_outputNames.empty()) {
+            m_outputNames.insert(std::make_pair(fname, col));
+        }
+
+        Oid pgsqltype = PQftype(m_pRes, col);
+        pgsqltype = ntohl(*((int32_t *) &pgsqltype));
+        // int size = PQfsize(m_pRes, col);
+        // int mod = PQfmod(m_pRes, col);
+        printf("%s : %i = %i\n", fname, col, intType);
+
+        unmapType(pgsqltype, maxSize, intType, varType);
+
+        if (m_outputs[col] == nullptr) {
+            // only the first time
+            m_outputs[col] = new PgSqlDbVariable(intType, varType, maxSize);
+        }
+    }
+
+    // free input parameters
+    for (o3d::UInt32 i = 0; i < m_numParam; ++i) {
+        deletePtr(paramValues[i]);
+    }
+
+    deletePtr(paramValues);
+}
+
+void PgSqlQuery::update()
 {
 //    O3D_ASSERT(m_stmt != nullptr);
 
@@ -649,12 +702,12 @@ void PgSqlDb::update()
 //    }
 }
 
-UInt32 PgSqlDb::getNumRows()
+UInt32 PgSqlQuery::getNumRows()
 {
     return m_numRow;
 }
 
-UInt64 PgSqlDb::getGeneratedKey() const
+UInt64 PgSqlQuery::getGeneratedKey() const
 {
 //    O3D_ASSERT(m_stmt != nullptr);
 //    if (m_stmt) {
@@ -666,38 +719,30 @@ UInt64 PgSqlDb::getGeneratedKey() const
 }
 
 // Fetch the results (outputs values) into the DbAttribute. Can be called in a while for each entry of the result.
-Bool PgSqlDb::fetch()
+Bool PgSqlQuery::fetch()
 {
-//    O3D_ASSERT(m_stmt != nullptr);
-//    if (m_stmt) {
-//        int res = mysql_stmt_fetch(m_stmt);
+    if (m_pRes) {
+         // int PQfnumber(const PGresult *res,const char *column_name); inverse de PQfname
+        for (o3d::Int32 i = 0; i < m_outputs.getSize(); ++i) {
+            DbVariable &var = *m_outputs[i];
+            char* value = PQgetvalue(m_pRes, m_currRow, i);
+            int len = PQgetlength(m_pRes, m_currRow, i);
 
-//        if (res == MYSQL_NO_DATA) {
-//            return False;
-//        } else if (res == MYSQL_DATA_TRUNCATED) {
-//            O3D_WARNING("MYSQL_DATA_TRUNCATED");
-//        } else if (res != 0) {
-//            O3D_ERROR(E_MySqlError(mysql_stmt_error(m_stmt)));
-//        }
-
-//		// validate arrays and strings results
-//        UInt32 co = m_outputs.getSize();
-//        for (size_t i = 0; i < co; ++i) {
-//            DbVariable &var = *m_outputs[i];
-
-//            if (var.isNull()) {
-//                continue;
-//            }
-
-//            // string
-//            if (var.getIntType() == DbVariable::IT_ARRAY_CHAR) {
-//                ArrayChar *array = (ArrayChar*)var.getObject();
-
-//                // add a terminal zero
-//                array->setSize(var.getLength()+1);
-//                (*array)[array->getSize()-1] = 0;
-//			}
-//            // array
+            // int32
+            if (var.getIntType() == DbVariable::IT_INT32) {
+                var.setInt32(ntohl(*((int32_t *) value)));
+                printf("int32 %i = %i\n", i, var.asInt32());
+            // double
+            } else if (var.getIntType() == DbVariable::IT_DOUBLE) {
+                printf("double %i \n", i);
+               // var.setDouble();
+            }
+            // string
+            else if (var.getIntType() == DbVariable::IT_ARRAY_CHAR) {
+                printf("str %i %i %s\n", i, len, value);
+                var.setCString(value);
+            }
+            // array
 //            else if (var.getIntType() == DbVariable::IT_ARRAY_UINT8) {
 //                ArrayUInt8 *array = (ArrayUInt8*)var.getObject();
 //                array->setSize(var.getLength());
@@ -721,152 +766,48 @@ Bool PgSqlDb::fetch()
 //                datetime->second = mysqlTime->second;
 //                datetime->year = mysqlTime->year;
 //            }
-//		}
+        }
 
-//        ++m_currRow;
-//        return True;
-//	}
+        ++m_currRow;
+        return True;
+    }
 
     return False;
 }
 
-UInt32 PgSqlDb::tellRow()
+UInt32 PgSqlQuery::tellRow()
 {
-//    if (m_stmt) {
-//        return m_currRow;
-//    } else {
-//        return 0;
-//    }
+    if (m_pRes) {
+        return m_currRow;
+    } else {
+        return 0;
+    }
 }
 
-void PgSqlDb::seekRow(UInt32 row)
+void PgSqlQuery::seekRow(UInt32 row)
 {
     if (row >= m_numRow) {
         O3D_ERROR(E_IndexOutOfRange("Row number"));
     }
 
-//    if (m_stmt) {
-//        mysql_stmt_data_seek(m_stmt, row);
-//        m_currRow = row;
-//    }
-}
-
-void PgSql::init()
-{
-    if (!ms_pgSqlLibState) {
-        Application::registerObject("o3d::PgSql", nullptr);
-        ms_pgSqlLibState = True;
+    if (m_pRes) {
+        // mysql_stmt_data_seek(m_stmt, row);
+        m_currRow = row;
     }
 }
 
-void PgSql::quit()
+void PgSqlQuery::unmapType(Oid pgsqltype,
+        UInt32 &maxSize,
+        DbVariable::IntType &intType,
+        DbVariable::VarType &varType)
 {
-    if (ms_pgSqlLibState) {
-        if (ms_pgSqlLibRefCount != 0) {
-            O3D_ERROR(E_InvalidOperation("Trying to quit pgsql library but some database still exists"));
-        }
+    switch (pgsqltype) {
+    case QBOOLOID:
+        intType = DbVariable::IT_BOOL;
+        varType = DbVariable::BOOLEAN;
+        maxSize = 1;
+        break;
 
-        Application::unregisterObject("o3d::PgSql");
-        ms_pgSqlLibState = False;
-    }
-}
-
-//void PgSqlQuery::mapType(
-//        DbVariable::VarType type,
-//        enum_field_types &mysqltype,
-//        unsigned long &mysqlsize)
-//{
-//    switch (type) {
-//    case DbVariable::BOOLEAN:
-//        mysqltype = MYSQL_TYPE_TINY;
-//        mysqlsize = 1;
-//        break;
-
-//    case DbVariable::CHAR:
-//        mysqltype = MYSQL_TYPE_TINY;
-//        mysqlsize = 1;
-//        break;
-
-//    case DbVariable::INT8:
-//        mysqltype = MYSQL_TYPE_TINY;
-//        mysqlsize = 1;
-//        break;
-
-//    case DbVariable::INT16:
-//        mysqltype = MYSQL_TYPE_SHORT;
-//        mysqlsize = 2;
-//        break;
-
-//    case DbVariable::INT24:
-//        mysqltype = MYSQL_TYPE_INT24;
-//        mysqlsize = 3;
-//        break;
-
-//    case DbVariable::INT32:
-//        mysqltype = MYSQL_TYPE_LONG;
-//        mysqlsize = 4;
-//        break;
-
-//        //MYSQL_TYPE_LONGLONG
-
-//    case DbVariable::FLOAT32:
-//        mysqltype = MYSQL_TYPE_FLOAT;
-//        mysqlsize = 4;
-//        break;
-
-//    case DbVariable::FLOAT64:
-//        mysqltype = MYSQL_TYPE_DOUBLE;
-//        mysqlsize = 8;
-//        break;
-
-//    case DbVariable::VARCHAR:
-//        mysqltype = MYSQL_TYPE_VARCHAR;
-//        mysqlsize = 1;
-//        break;
-
-//    case DbVariable::STRING:
-//        mysqltype = MYSQL_TYPE_VAR_STRING;
-//        mysqlsize = 1;
-//        break;
-
-//    case DbVariable::TINY_ARRAY:
-//        mysqltype = MYSQL_TYPE_TINY_BLOB;
-//        mysqlsize = 1;
-//        break;
-
-//    case DbVariable::ARRAY:
-//        mysqltype = MYSQL_TYPE_BLOB;
-//        mysqlsize = 1;
-//        break;
-
-//    case DbVariable::MEDIUM_ARRAY:
-//        mysqltype = MYSQL_TYPE_MEDIUM_BLOB;
-//        mysqlsize = 1;
-//        break;
-
-//    case DbVariable::LONG_ARRAY:
-//        mysqltype = MYSQL_TYPE_LONG_BLOB;
-//        mysqlsize = 1;
-//        break;
-
-//    case DbVariable::TIMESTAMP:
-//        mysqltype = MYSQL_TYPE_TIMESTAMP;
-//        mysqlsize = sizeof(MYSQL_TIME);
-//        break;
-
-//    default:
-//        O3D_ASSERT(0);
-//        break;
-//    };
-//}
-
-//void PgSqlQuery::unmapType(
-//        enum_field_types mysqltype,
-//        UInt32 &maxSize,
-//        DbVariable::IntType &intType,
-//        DbVariable::VarType &varType)
-//{
-//    switch (mysqltype) {
 //    case MYSQL_TYPE_TINY:
 //        intType = DbVariable::IT_INT8;
 //        varType = DbVariable::INT8;
@@ -885,13 +826,23 @@ void PgSql::quit()
 //        maxSize = 4;
 //        break;
 
-//    case MYSQL_TYPE_LONG:
-//        intType = DbVariable::IT_INT32;
-//        varType = DbVariable::INT32;
-//        maxSize = 4;
-//        break;
+    case 10:
+    case QINT2OID:
+    case QINT4OID:
+    case QOIDOID:
+    case QREGPROCOID:
+    case QXIDOID:
+    case QCIDOID:
+        intType = DbVariable::IT_INT32;
+        varType = DbVariable::INT32;
+        maxSize = 4;
+        break;
 
-//        //MYSQL_TYPE_LONGLONG
+//    case QINT8OID:
+//        intType = DbVariable::IT_INT64
+//        varType = DbVariable::IN64
+//        maxSize = 8;
+//        break;
 
 //    case MYSQL_TYPE_FLOAT:
 //        intType = DbVariable::IT_FLOAT;
@@ -899,13 +850,16 @@ void PgSql::quit()
 //        maxSize = 4;
 //        break;
 
-//    case MYSQL_TYPE_DOUBLE:
-//        intType = DbVariable::IT_DOUBLE;
-//        varType = DbVariable::FLOAT64;
-//        maxSize = 8;
-//        break;
+    case QNUMERICOID:
+    case QFLOAT4OID:
+    case QFLOAT8OID:
+        intType = DbVariable::IT_DOUBLE;
+        varType = DbVariable::FLOAT64;
+        maxSize = 8;
+        break;
 
-//    case MYSQL_TYPE_VARCHAR:
+//    case SMVARCHAR_ARRAYOID:
+//    case SMTEXT_ARRAYOID:
 //        intType = DbVariable::IT_ARRAY_CHAR;
 //        varType = DbVariable::ARRAY;
 //        maxSize = 256;
@@ -935,20 +889,39 @@ void PgSql::quit()
 //        maxSize = 4096;
 //        break;
 
-//    case MYSQL_TYPE_LONG_BLOB:
-//        intType = DbVariable::IT_ARRAY_UINT8;
-//        varType = DbVariable::LONG_ARRAY;
-//        maxSize = 4096;
+    case QBYTEAOID:
+        intType = DbVariable::IT_ARRAY_UINT8;
+        varType = DbVariable::LONG_ARRAY;
+        maxSize = 4096;
+        break;
+
+//    case QABSTIMEOID:
+//    case QRELTIMEOID:
+//    case QDATEOID:
+//        intType = DbVariable::IT_DATE
+//        varType = DbVariable::TIMESTAMP;
+//        maxSize = xxx
 //        break;
 
-//    case MYSQL_TYPE_TIMESTAMP:
+//    case QTIMEOID:
+//    case QTIMETZOID:
+//        intType = DbVariable::IT_DATETIME
+//        varType = DbVariable::TIMESTAMP;
+//        maxSize = xxx
+//        break;
+
+//    case QTIMESTAMPOID:
+//    case QTIMESTAMPTZOID:
 //        intType = DbVariable::IT_DATE;
 //        varType = DbVariable::TIMESTAMP;
-//        maxSize = sizeof(MYSQL_TIME);
+//        maxSize = xxx
 //        break;
 
-//    default:
-//        O3D_ASSERT(0);
-//        break;
-//    };
-//}
+    // case 10:
+    default:
+        intType = DbVariable::IT_ARRAY_CHAR;
+        varType = DbVariable::ARRAY;
+        maxSize = 256;
+        break;
+    };
+}

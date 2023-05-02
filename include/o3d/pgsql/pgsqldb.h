@@ -178,23 +178,15 @@ protected:
     TemplateArray<DbVariable*> m_outputs;
 
     PGconn *m_pDB;
-    // MYSQL_STMT *m_stmt;
-
-    // TemplateArray<MYSQL_BIND> m_param_bind;
-    // TemplateArray<MYSQL_BIND> m_result_bind;
+    PGresult *m_pRes;
 
     Bool m_needBind;
 
-    ////MYSQL_RES *m_prepareMetaParam;
-    // MYSQL_RES *m_prepareMetaResult;
-
-//    void mapType(DbVariable::VarType type, enum_field_types &mysqltype, unsigned long &mysqlsize);
-
-//    void unmapType(
-//            enum_field_types mysqltype,
-//            UInt32 &maxSize,
-//            DbVariable::IntType &intType,
-//            DbVariable::VarType &varType);
+    void unmapType(
+            Oid pgsqltype,
+            UInt32 &maxSize,
+            DbVariable::IntType &intType,
+            DbVariable::VarType &varType);
 };
 
 } // namespace pgsql

@@ -19,4 +19,4 @@ endif()
 set(EXECUTABLE_OUTPUT_PATH ${PROJECT_BINARY_DIR})
 
 add_executable(${TARGET_NAME} ${TARGET_SRC})
-target_link_libraries(${TARGET_NAME} ${LIBRARY} pgsqlclient ${OBJECTIVE3D_LIBRARY})
+target_link_libraries(${TARGET_NAME} ${LIBRARY} pq ${OBJECTIVE3D_LIBRARY})

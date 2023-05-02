@@ -7,7 +7,7 @@
  * @details 
  */
 
-#include "o3d/mysql/pgsqldbvariable.h"
+#include "o3d/pgsql/pgsqldbvariable.h"
 
 using namespace o3d;
 using namespace o3d::pgsql;

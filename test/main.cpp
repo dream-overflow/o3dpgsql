@@ -29,16 +29,20 @@ static Int32 main()
 {
     PgSql::init();
 
-    PgSqlDb mysql;
+    PgSqlDb *pgsql = new PgSqlDb();
 
     std::cout << "Connecting to the PgSql db..." << std::endl;
 
-//    if (!mysql.connect("localhost", 5432, "o3dtest", "o3dtest", "o3dtest")) {
-//		std::cout << "Unable to connect to the DB" << std::endl;
-//		return -1;
-//	}
+    if (!pgsql->connect("127.0.0.1", 5432, "siis", "siis", "siis")) {
+        std::cout << "Unable to connect to the DB" << std::endl;
 
-//	std::cout << "Successfully connected:" << std::endl;
+        o3d::deletePtr(pgsql);
+        PgSql::quit();
+
+        return -1;
+    }
+
+    std::cout << "Successfully connected:" << std::endl;
 
 //	std::cout << "Create an STMT Request..." << std::endl;
 //    DbQuery *query = mysql.registerQuery("test","SELECT Login, PlayersId FROM user WHERE UId = ?");
@@ -90,12 +94,24 @@ static Int32 main()
 //        std::cout << "UId= " << query2->getOut("UId").asUInt32() << std::endl;
 //    }
 
-//	mysql.disconnect();
+    pgsql->disconnect();
+    o3d::deletePtr(pgsql);
 
     PgSql::quit();
     return 0;
 }
 };
 
+class MyAppSettings : public AppSettings
+{
+public:
+
+    MyAppSettings() : AppSettings()
+    {
+        useDisplay = false;
+        clearLog = false;
+    }
+};
+
 // We Call our application in console mode
-O3D_CONSOLE_MAIN(PgSqlTest, O3D_DEFAULT_CLASS_SETTINGS)
+O3D_CONSOLE_MAIN(PgSqlTest, MyAppSettings)

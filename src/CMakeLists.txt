@@ -32,7 +32,7 @@ endif()
 set(LIBRARY_OUTPUT_PATH ${PROJECT_BINARY_DIR})
 
 add_library(${TARGET_NAME} SHARED ${TARGET_SRC})
-target_link_libraries(${TARGET_NAME} pgsqlclient ${OBJECTIVE3D_LIBRARY})
+target_link_libraries(${TARGET_NAME} pq ${OBJECTIVE3D_LIBRARY})
 
 #----------------------------------------------------------
 # install
