@@ -14,6 +14,7 @@
 #include <o3d/core/application.h>
 #include <o3d/core/objects.h>
 
+#include <stdio.h>
 #include <netinet/in.h>
 
 using namespace o3d;
@@ -397,6 +398,42 @@ void PgSqlQuery::setUInt32(UInt32 attr, UInt32 v)
     m_needBind = True;
 }
 
+void o3d::pgsql::PgSqlQuery::setFloat(UInt32 attr, Float v)
+{
+    if (attr >= m_numParam) {
+        O3D_ERROR(E_IndexOutOfRange("Input attribute id"));
+    }
+
+    if (m_inputs[attr]) {
+        deletePtr(m_inputs[attr]);
+    }
+
+    m_inputs[attr] = new PgSqlDbVariable(DbVariable::IT_FLOAT, DbVariable::FLOAT32, (UInt8*)&v);
+    DbVariable &var = *m_inputs[attr];
+
+    // @todo for STMT
+
+    m_needBind = True;
+}
+
+void o3d::pgsql::PgSqlQuery::setDouble(UInt32 attr, Double v)
+{
+    if (attr >= m_numParam) {
+        O3D_ERROR(E_IndexOutOfRange("Input attribute id"));
+    }
+
+    if (m_inputs[attr]) {
+        deletePtr(m_inputs[attr]);
+    }
+
+    m_inputs[attr] = new PgSqlDbVariable(DbVariable::IT_DOUBLE, DbVariable::FLOAT64, (UInt8*)&v);
+    DbVariable &var = *m_inputs[attr];
+
+    // @todo for STMT
+
+    m_needBind = True;
+}
+
 void PgSqlQuery::setCString(UInt32 attr, const CString &v)
 {
     if (attr >= m_numParam) {
@@ -595,21 +632,49 @@ void PgSqlQuery::execute()
 
     // const Oid *paramTypes;
     char **paramValues = new char*[m_numParam];
-    const Oid *paramTypes = nullptr;    // let the backend deduce param type
-    const int *paramLengths = nullptr;  // if all texts no need
-    const int *paramFormats = nullptr;  // default to all text params
+    Oid *paramTypes = nullptr;  // new Oid[m_numParam];    // let the backend deduce param type
+    int *paramLengths = nullptr;  // new int[m_numParam];  // if all texts no need
+    int *paramFormats = nullptr;  // default to all text params
 
     for (o3d::Int32 i = 0; i < m_inputs.getSize(); ++i) {
         if (m_inputs[i]->getIntType() == DbVariable::IT_CSTRING) {
             CString v = m_inputs[i]->asCString();
 
+            // paramTypes[i] = 0;
             paramValues[i] = new char[v.length()+1];
+            // paramLengths[i] = -1;
             memcpy(paramValues[i], v.getData(), v.length()+1);
+
         } else if (m_inputs[i]->getIntType() == DbVariable::IT_INT32) {
+            o3d::Int32 v = m_inputs[i]->asInt32();
+
+            // paramTypes[i] = 0;
+            paramValues[i] = new char[4];
+            // paramLengths[i] = 4;
+            memcpy(paramValues[i], &v, 4);
 
         } else if (m_inputs[i]->getIntType() == DbVariable::IT_ARRAY_UINT8) {
 
+            // @todo
+
+        } else if (m_inputs[i]->getIntType() == DbVariable::IT_FLOAT) {
+            o3d::Float v = m_inputs[i]->asFloat();
+
+            // paramTypes[i] = 0;
+            paramValues[i] = new char[4];
+            // paramLengths[i] = 4;
+            memcpy(paramValues[i], &v, 4);
+
         } else if (m_inputs[i]->getIntType() == DbVariable::IT_DOUBLE) {
+            o3d::Double v = m_inputs[i]->asDouble();
+
+            o3d::Int32 l = snprintf(nullptr, 0, "%g", v);
+            Char *str = new Char[l+1];
+            sprintf(str, "%g", v);
+
+            // paramTypes[i] = 0;
+            paramValues[i] = str;
+            // paramLengths[i] = -1;
 
         } else {
             // @todo others ...
@@ -658,12 +723,11 @@ void PgSqlQuery::execute()
         }
 
         Oid pgsqltype = PQftype(m_pRes, col);
-        pgsqltype = ntohl(*((int32_t *) &pgsqltype));
-        // int size = PQfsize(m_pRes, col);
-        // int mod = PQfmod(m_pRes, col);
-        // printf("%s : %i = %i\n", fname, col, intType);
+        int size = PQfsize(m_pRes, col);
+        int mod = PQfmod(m_pRes, col);
 
         unmapType(pgsqltype, maxSize, intType, varType);
+        // printf("%s : %i = %i(%i) (%i %i)\n", fname, col, pgsqltype, intType, size, mod);
 
         if (m_outputs[col] == nullptr) {
             // only the first time
@@ -730,27 +794,47 @@ Bool PgSqlQuery::fetch()
             char* value = PQgetvalue(m_pRes, m_currRow, i);
             int len = PQgetlength(m_pRes, m_currRow, i);
 
-            // int32
             if (var.getIntType() == DbVariable::IT_INT32) {
+                // int32
                 var.setInt32(ntohl(*((int32_t *) value)));
                 // printf("int32 %i = %i\n", i, var.asInt32());
+
+            } else if (var.getIntType() == DbVariable::IT_INT64) {
+                // int64
+                if (System::getNativeByteOrder() != System::ORDER_BIG_ENDIAN) {
+                    System::swapBytes8(value);
+                }
+                var.setInt64(*(o3d::Int64 *) value);
+                // printf("int64 %i %lli\n", i, var.asInt64());
+
+            } else if (var.getIntType() == DbVariable::IT_FLOAT) {
                 // double
+                if (System::getNativeByteOrder() != System::ORDER_BIG_ENDIAN) {
+                    System::swapBytes4(value);
+                }
+                var.setFloat(*(o3d::Float*) value);
+                // printf("float %i %f\n", i, var.asFloat());
+
             } else if (var.getIntType() == DbVariable::IT_DOUBLE) {
-                // printf("double %i \n", i);
-                // var.setDouble();
-            }
-            // string
-            else if (var.getIntType() == DbVariable::IT_ARRAY_CHAR) {
-                // printf("str %i %i %s\n", i, len, value);
+                // double
+                if (System::getNativeByteOrder() != System::ORDER_BIG_ENDIAN) {
+                    System::swapBytes8(value);
+                }
+                var.setDouble(*(o3d::Double *) value);
+                // printf("double %i %f\n", i, var.asDouble());
+
+            } else if (var.getIntType() == DbVariable::IT_ARRAY_CHAR) {
+                // string
                 ArrayChar *array = (ArrayChar*)var.getObject();
+                // printf("str %i %i %s\n", i, len, value);
 
                 // add a terminal zero
-                memcpy(array->getData(), value, len);
                 array->setSize(len+1);
+                memcpy(array->getData(), value, len);
                 (*array)[array->getSize()-1] = 0;
-            }
-            // string
-            else if (var.getIntType() == DbVariable::IT_CSTRING) {
+
+            } else if (var.getIntType() == DbVariable::IT_CSTRING) {
+                // string
                 // printf("str %i %i %s\n", i, len, value);
                 var.setCString(value);
             }
@@ -838,7 +922,6 @@ void PgSqlQuery::unmapType(Oid pgsqltype,
 //        maxSize = 4;
 //        break;
 
-    case 10:
     case QINT2OID:
     case QINT4OID:
     case QOIDOID:
@@ -850,11 +933,11 @@ void PgSqlQuery::unmapType(Oid pgsqltype,
         maxSize = 4;
         break;
 
-//    case QINT8OID:
-//        intType = DbVariable::IT_INT64
-//        varType = DbVariable::IN64
-//        maxSize = 8;
-//        break;
+    case QINT8OID:
+        intType = DbVariable::IT_INT64;
+        varType = DbVariable::INT64;
+        maxSize = 8;
+        break;
 
 //    case MYSQL_TYPE_FLOAT:
 //        intType = DbVariable::IT_FLOAT;
@@ -929,7 +1012,7 @@ void PgSqlQuery::unmapType(Oid pgsqltype,
 //        maxSize = xxx
 //        break;
 
-    // case 10:
+    case 1043:
     default:
         intType = DbVariable::IT_ARRAY_CHAR;
         varType = DbVariable::ARRAY;
