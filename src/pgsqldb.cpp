@@ -398,6 +398,73 @@ void PgSqlQuery::setUInt32(UInt32 attr, UInt32 v)
     m_needBind = True;
 }
 
+void o3d::pgsql::PgSqlQuery::setInt64(UInt32 attr, Int64 v)
+{
+    if (attr >= m_numParam) {
+        O3D_ERROR(E_IndexOutOfRange("Input attribute id"));
+    }
+
+    if (m_inputs[attr]) {
+        deletePtr(m_inputs[attr]);
+    }
+
+    m_inputs[attr] = new PgSqlDbVariable(DbVariable::IT_INT64, DbVariable::INT64, (UInt8*)&v);
+    DbVariable &var = *m_inputs[attr];
+/*
+    enum_field_types dbtype = (enum_field_types)0;
+    unsigned long dbsize = 0;
+
+    mapType(var.getType(), dbtype, dbsize);
+
+    memset(&m_param_bind[attr], 0, sizeof(MYSQL_BIND));
+
+    m_param_bind[attr].buffer_type = (enum_field_types)dbtype;
+    m_param_bind[attr].buffer = (void*)var.getObjectPtr();
+    m_param_bind[attr].buffer_length = var.getObjectSize();
+
+    //m_param_bind[attr].is_null_value = False; @see if we support null value
+    m_param_bind[attr].is_null = 0;
+
+    var.setLength(dbsize);
+    m_param_bind[attr].length = (unsigned long*)var.getLengthPtr();
+*/
+    m_needBind = True;
+}
+
+void o3d::pgsql::PgSqlQuery::setUInt64(UInt32 attr, UInt64 v)
+{
+    if (attr >= m_numParam) {
+        O3D_ERROR(E_IndexOutOfRange("Input attribute id"));
+    }
+
+    if (m_inputs[attr]) {
+        deletePtr(m_inputs[attr]);
+    }
+
+    m_inputs[attr] = new PgSqlDbVariable(DbVariable::IT_UINT64, DbVariable::UINT64, (UInt8*)&v);
+    DbVariable &var = *m_inputs[attr];
+/*
+    enum_field_types dbtype = (enum_field_types)0;
+    unsigned long dbsize = 0;
+
+    mapType(var.getType(), dbtype, dbsize);
+
+    memset(&m_param_bind[attr], 0, sizeof(MYSQL_BIND));
+
+    m_param_bind[attr].buffer_type = (enum_field_types)dbtype;
+
+    m_param_bind[attr].buffer = (void*)var.getObjectPtr();
+    m_param_bind[attr].buffer_length = var.getObjectSize();
+
+    m_param_bind[attr].is_null = 0;
+    m_param_bind[attr].is_unsigned = True;
+
+    var.setLength(dbsize);
+    m_param_bind[attr].length = (unsigned long*)var.getLengthPtr();
+*/
+    m_needBind = True;
+}
+
 void o3d::pgsql::PgSqlQuery::setFloat(UInt32 attr, Float v)
 {
     if (attr >= m_numParam) {
@@ -648,10 +715,24 @@ void PgSqlQuery::execute()
         } else if (m_inputs[i]->getIntType() == DbVariable::IT_INT32) {
             o3d::Int32 v = m_inputs[i]->asInt32();
 
+            o3d::Int32 l = snprintf(nullptr, 0, "%i", v);
+            Char *str = new Char[l+1];
+            sprintf(str, "%i", v);
+
             // paramTypes[i] = 0;
-            paramValues[i] = new char[4];
-            // paramLengths[i] = 4;
-            memcpy(paramValues[i], &v, 4);
+            paramValues[i] = str;
+            // paramLengths[i] = -1;
+
+        } else if (m_inputs[i]->getIntType() == DbVariable::IT_INT64) {
+            o3d::Int64 v = m_inputs[i]->asInt64();
+
+            o3d::Int32 l = snprintf(nullptr, 0, "%lli", v);
+            Char *str = new Char[l+1];
+            sprintf(str, "%lli", v);
+
+            // paramTypes[i] = 0;
+            paramValues[i] = str;
+            // paramLengths[i] = -1;
 
         } else if (m_inputs[i]->getIntType() == DbVariable::IT_ARRAY_UINT8) {
 
@@ -660,10 +741,13 @@ void PgSqlQuery::execute()
         } else if (m_inputs[i]->getIntType() == DbVariable::IT_FLOAT) {
             o3d::Float v = m_inputs[i]->asFloat();
 
+            o3d::Int32 l = snprintf(nullptr, 0, "%g", v);
+            Char *str = new Char[l+1];
+            sprintf(str, "%g", v);
+
             // paramTypes[i] = 0;
-            paramValues[i] = new char[4];
-            // paramLengths[i] = 4;
-            memcpy(paramValues[i], &v, 4);
+            paramValues[i] = str;
+            // paramLengths[i] = -1;
 
         } else if (m_inputs[i]->getIntType() == DbVariable::IT_DOUBLE) {
             o3d::Double v = m_inputs[i]->asDouble();
@@ -788,6 +872,10 @@ UInt64 PgSqlQuery::getGeneratedKey() const
 Bool PgSqlQuery::fetch()
 {
     if (m_pRes) {
+        if (m_currRow >= m_numRow) {
+            return False;
+        }
+
          // int PQfnumber(const PGresult *res,const char *column_name); inverse de PQfname
         for (o3d::Int32 i = 0; i < m_outputs.getSize(); ++i) {
             DbVariable &var = *m_outputs[i];
