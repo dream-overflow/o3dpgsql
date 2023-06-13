@@ -161,7 +161,7 @@ Bool PgSqlDb::connect(
         O3D_ERROR(o3d::pgsql::E_PgSqlError(msg));
     }
 
-    O3D_MESSAGE("Successfuly connected to the PgSql database");
+    // O3D_MESSAGE("Successfully connected to the PgSql database");
 
     m_isConnected = True;
 
